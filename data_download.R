@@ -109,7 +109,9 @@ library(stringr)
 weather_event_tbl <- as.tbl(
   select(weather_event_df
          , id = EVENT_ID, st = STATE_FIPS, cz = CZ_FIPS 
-         , type = EVENT_TYPE, begin = BEGIN_DATE_TIME , tz = CZ_TIMEZONE
+         , type = EVENT_TYPE
+         , begin = BEGIN_DATE_TIME
+         , tz = CZ_TIMEZONE
          , INJURIES_DIRECT:DAMAGE_CROPS
          , fscale = TOR_F_SCALE
          , begin_lat = BEGIN_LAT

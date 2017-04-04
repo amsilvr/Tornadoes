@@ -1,0 +1,467 @@
+---
+title: "Weather Events and WEA Messages"
+author: "Aaron M. Silverman"
+date: "March 31, 2017"
+output:
+  html_notebook:
+    theme: cosmo
+  html_document:
+    fig_caption: yes
+    highlight: pygments
+    keep_md: yes
+    theme: cosmo
+    toc: yes
+  pdf_document:
+    fig_caption: yes
+    fig_width: 7
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+
+```{r setup, echo = FALSE, cache = TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+library(knitr)
+library(tidyverse)
+library(lubridate)
+library(RCurl)
+library(stringr)
+
+```
+# Executive Summary
+
+On April 7,  2012, the Federal Emergency Management Agency (FEMA) began to use [Wireless Emergency Alerts (WEA)](https://www.fema.gov/frequently-asked-questions-wireless-emergency-alerts) to warn Americans of "imminent threats to life or property." These alerts consisted of 90-character messages sent by participating Cellular Mobile Service (CMS) providers over a high-priority channel to devices that were in range of specific cellular towers.
+
+As a part of the 2006 WARN act which allowed the creation of WEA, all public television stations with Non-Commercial Educational licenses were required to pass the WEA messages from FEMA to CMS providers as a part of the normal television broadcast feed. Since 2010, the PBS WARN project has designed, implemented, and maintained this diverse path for CMS providers to receive WEA messages. 
+
+Anecdotal evidence exists that WEA messages have saved lives in numerous situations, there has not been an analysis of the data on storm-related casualties before and after WEA implementation. 
+
+We find that the commencement of tornado and flash flood warnings delivered over WEA coincide with a significant drop in the mean number of fatalities and injuries caused by tornadoes and a 90% decrease in the mean number of injuries caused by flash floods.
+
+When comparing the fatality rates of similarly-sized tornado events (based on EF Scale) before and after the availability of WEA, we find that the mean number of deaths has gone down for tornadoes smaller than EF5. 
+
+Recently, the FCC issued [FCC 16-127, Report and Order and Notice of Proposed Rule-Making](https://www.fcc.gov/document/improving-wireless-emergency-alerts-and-community-initiated-alerting-1) which would require CMS providers to support larger messages. Although this analysis does not draw any causal relationship between the availability of WEA messages and the mean number of deaths and injuries caused by weather events, any  discussion of revisions to WEA should be informed by a thorough discussion of the current program's successes and shortcomings.
+
+# Data 
+
+Event information was taken from the  [NOAA](ftp://ftp.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/) database of storm events. The events were downloaded from NOAA immediatly prior to this report being run. 
+
+```{r main_data_frame, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+
+#create download and save-file URLs
+
+## To analyze most recent data uncomment the following two lines
+url <- "ftp://ftp.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/"
+filenames <-  getURL(url, ftp.use.epsv = FALSE, dirlistonly = TRUE)
+
+dld_base <- "StormEvents_details-ftp_v1.0_d"
+
+if (!file.exists("data")) {
+        dir.create("data")
+}
+
+if (!exists("weather_event_df")) {
+  # If not, get to work
+  
+  filenames <- strsplit(filenames, "\r\n")
+  filenames = unlist(filenames)
+  
+  # detail.files contains the list of the files that we actually
+  # want to download. In this case 1997 - 2016
+  
+  detail.files <- filenames[grep(dld_base, filenames)]
+  filenames = ""
+  for (i in 1997:2016) {
+    filenames[i - 1996] <-
+      detail.files[grep(paste0(".*_d", i, "_.*"), detail.files)]
+  }
+  
+  # read files into Weather Event Data Frame (wedf)
+  weather_event_df <- data.frame()
+  
+  for (filename in filenames) {
+    # message("downloading and parsing ", filename)
+    weather_event_df  <- bind_rows(weather_event_df,
+                      read_csv(
+                        file = (paste0(url, filename))
+                        , col_types =
+                          cols(
+                            BEGIN_YEARMONTH = "i",
+                            BEGIN_DAY = "i",
+                            BEGIN_TIME = "c",
+                            END_YEARMONTH = "i",
+                            END_DAY = "i",
+                            END_TIME = "c",
+                            EPISODE_ID = "i",
+                            EVENT_ID = "i",
+                            STATE = "c",
+                            STATE_FIPS = "i",
+                            YEAR = "i",
+                            MONTH_NAME = "c",
+                            EVENT_TYPE = "c",
+                            CZ_TYPE = "c",
+                            CZ_FIPS = "i",
+                            CZ_NAME = "c",
+                            WFO = "c",
+                            BEGIN_DATE_TIME = "c",
+                            CZ_TIMEZONE = "c",
+                            END_DATE_TIME = "c",
+                            INJURIES_DIRECT = "i",
+                            INJURIES_INDIRECT = "i",
+                            DEATHS_DIRECT = "i",
+                            DEATHS_INDIRECT = "i",
+                            DAMAGE_PROPERTY = "c",
+                            DAMAGE_CROPS = "c",
+                            SOURCE = "c",
+                            MAGNITUDE = "d",
+                            MAGNITUDE_TYPE = "c",
+                            FLOOD_CAUSE = "c",
+                            CATEGORY = "d",
+                            TOR_F_SCALE = "c",
+                            TOR_LENGTH = "d",
+                            TOR_WIDTH = "d",
+                            TOR_OTHER_WFO = "c",
+                            TOR_OTHER_CZ_STATE = "c",
+                            TOR_OTHER_CZ_FIPS = "i",
+                            TOR_OTHER_CZ_NAME = "c",
+                            BEGIN_RANGE = "i",
+                            BEGIN_AZIMUTH = "c",
+                            BEGIN_LOCATION = "c",
+                            END_RANGE = "i",
+                            END_AZIMUTH = "c",
+                            END_LOCATION = "c",
+                            BEGIN_LAT = "d",
+                            BEGIN_LON = "d",
+                            END_LAT = "d",
+                            END_LON = "d",
+                            EPISODE_NARRATIVE = "-",
+                            EVENT_NARRATIVE = "-",
+                            DATA_SOURCE = "c"
+                          )
+                      )
+                    )
+  }
+  
+}
+
+weather_event_tbl <- as.tbl(
+  select(weather_event_df
+         , id = EVENT_ID, st = STATE_FIPS, cz = CZ_FIPS 
+         , type = EVENT_TYPE
+         , begin = BEGIN_DATE_TIME
+         , tz = CZ_TIMEZONE
+         , INJURIES_DIRECT:DAMAGE_CROPS
+         , fscale = TOR_F_SCALE
+         , begin_lat = BEGIN_LAT
+         , begin_lon = BEGIN_LON 
+         , end_lat = END_LAT
+         , end_lon = END_LON
+  )) %>%
+  mutate(type = tolower(type)) %>%
+  mutate(type = gsub("heavy wind", "high wind", type)) %>%
+  mutate(type = gsub("high snow", "heavy snow", type)) %>%
+  mutate(type = gsub("^hurricane$", "hurricane (typhoon)", type)) %>%
+  mutate(type = gsub("landslide", "avalanche", type)) %>%
+  mutate(type = gsub("thunderstorm winds?.*", "thunderstorm wind", type)) %>%
+  mutate(type = gsub("volcanic ashfall", "volcanic ash", type)) %>%
+  mutate(type = str_to_title(type)) %>%
+  mutate(fscale = as.factor(gsub("^E?F","F",fscale))) %>%
+  dplyr::filter(type != "Northern Lights") %>%
+  dplyr::filter(type != "Other") %>%
+  mutate( type = as.factor(type)
+          ,st = as.factor(sprintf("%02d",st))
+          ,cz = as.factor(sprintf("%05d",cz))
+          ,begin = dmy_hms(begin)
+          ,tz = toupper(str_trunc(tz, 3, side = "r", ellipsis = ""))
+  ) %>%
+  arrange(begin) 
+
+rm(weather_event_df)
+```
+
+# Effects of WEA on Weather-Related Injuries and Deaths
+
+The first question that I would like to answer is if there has been any change in the number of deaths and/or injuries caused by flash floods and/or tornadoes since the National Weather Service started issuing them in April 2012.  As a control, I will look at the same statistics for other localized, fast-moving weather events with relatively high amounts of casualties - thunderstorm winds and lightning; neither of which are frequently included in WEA messages.
+
+The event is considered "Before WEA"" if occurred before April 7, 2012 and "After WEA" if it occurred after that date.
+
+```{r any_wea_effect, fig.height = 4, message=FALSE, warning=FALSE, cache=TRUE}
+
+
+# Isolate tornado events
+tornadoes <- filter(weather_event_tbl, type == "Tornado") %>%
+  select(id, 1:3, begin
+         , d_direct = DEATHS_DIRECT
+         , d_indirect = DEATHS_INDIRECT
+         , i_direct = INJURIES_DIRECT
+         , i_indirect = INJURIES_INDIRECT
+         , fscale
+         ) %>%
+  mutate(year = year(begin)
+         , wea_enabled = factor(
+           if_else(begin >= mdy("4/7/2012")
+                   , false = "Before"
+                   , true = "After")
+           , levels = c("Before", "After")
+           , ordered = FALSE
+         )
+  )
+
+tornado_deaths <- tornadoes %>% 
+  group_by(year) %>% 
+  summarize(count = n()
+            , d_direct = sum(d_direct)
+            , d_indirect = sum(d_indirect)
+            , i_direct = sum(i_direct)
+            , i_indirect = sum(i_indirect)
+            )
+  
+#compare tornadoes and flash floods to non-wea alerted storm events
+
+tor_flo_wind_light <- filter(weather_event_tbl #event.damage from former version
+        , type %in% c("Flash Flood", "Tornado"
+                      , "Thunderstorm Wind" ,"Lightning")) %>%
+    transmute(type = factor(as.character(type)
+                            , levels = c("Flash Flood"
+                                        , "Tornado"
+                                        , "Thunderstorm Wind"
+                                        ,"Lightning"))
+            , begin
+            , year = year(begin)
+            , d_injuries = INJURIES_DIRECT
+            , i_injuries = INJURIES_INDIRECT
+            , d_deaths = DEATHS_DIRECT
+            , i_deaths = DEATHS_INDIRECT
+            , fips = paste0(st,cz)
+            , fscale
+            , wea_enabled = factor(
+                if_else(begin >= mdy("4/7/2012")
+                    , false = "Before"
+                    , true = "After")
+                , levels = c("Before", "After")
+                , ordered = FALSE
+          )
+)   
+twfl_yrly <- group_by(tor_flo_wind_light, type, year) %>%
+  summarize(count = n()
+            , deaths = sum(d_deaths)
+            , death_rate = round((deaths/count),digits = 4)
+            )
+
+tfwl_sum <- group_by(tor_flo_wind_light, type) %>% 
+  summarise(count = n()
+            , deaths = sum(d_deaths)
+            , death_rate = round((deaths/count),digits = 4)
+            , injuries = sum(d_injuries)
+            , injury_rate = round((injuries/count),digits = 4)
+            ) 
+
+twfl_wea_diff <- group_by(tor_flo_wind_light, type, wea_enabled) %>%
+summarise(count = n()
+          , deaths = sum(d_deaths)
+          , death_rate = round((deaths/count),digits = 4)
+          , injuries = sum(d_injuries)
+          , injury_rate = round((injuries/count),digits = 4)
+) 
+
+tornado_sum_tbl <- filter(tornadoes
+                          , as.numeric(fscale) >=0) %>%
+  select(year
+         , deaths = d_direct
+         , injuries = i_direct
+         , fscale
+         , wea_enabled) %>%
+  group_by(fscale, wea_enabled) %>%
+  summarize_at(c("deaths", "injuries"), c("mean","sum")) %>%
+  mutate(
+               death_rate = round(as.numeric(deaths_mean), 4)
+            ,  injury_rate = round(as.numeric(injuries_mean), 4)
+            ) %>%
+  select(-c(3:4))
+
+
+tornadoes_hourly <- transmute(tornadoes
+                              , hour = hour(begin)
+                              , deaths = d_direct
+                              , injuries = i_direct
+                              , fscale = as.numeric(str_extract(fscale, "[0-9]"))
+                              , wea_enabled) %>%
+  group_by(hour, wea_enabled) %>%
+  summarize_at(c("deaths", "injuries", "fscale"), "mean", na.rm = TRUE) %>%
+  mutate(
+    death_rate = round(as.numeric(deaths), 4)
+    , injury_rate = round(as.numeric(injuries), 4)
+    , fscale = round(fscale, 2)) %>%
+  select(hour, wea_enabled, death_rate, injury_rate, fscale)
+
+t_h_str_distr <- transmute(tornadoes
+                            , hour = hour(begin)
+                            , wea_enabled
+                            , fscale) %>%
+  group_by(hour, wea_enabled, fscale) %>%
+  summarize(events = n())
+
+str_events_dist <- ungroup(t_h_str_distr) %>%
+group_by(fscale, wea_enabled) %>%
+summarize(tot_events = sum(events)) %>%
+  inner_join(t_h_str_distr) %>%
+  ungroup() %>%
+  transmute(hour
+            , fscale
+            , wea_enabled
+            , dist = round(events/tot_events,4)) %>%
+  arrange(hour, fscale, wea_enabled)
+ 
+
+t_h_by_strength <- transmute(tornadoes
+                               , hour = hour(begin)
+                               , deaths = d_direct
+                               , injuries = i_direct
+                               , fscale
+                               , wea_enabled) %>%
+  group_by(hour, wea_enabled, fscale) %>%
+  summarize_all(funs("mean") )%>%
+  mutate(
+    death_rate = round(as.numeric(deaths), 4)
+    , injury_rate = round(as.numeric(injuries), 4) )%>%
+  select(hour, wea_enabled, fscale, death_rate, injury_rate)
+
+## Hourly distribution of tornadoes before and after WEA
+##   
+tornadoes_hourly_distro <- transmute(tornadoes
+                             , hour = hour(begin)
+                             , wea_enabled) %>%
+  group_by(hour, wea_enabled) %>%
+  summarize(events = n())
+
+t_dist_after <- filter(tornadoes_hourly_distro
+                       , wea_enabled == "After") 
+t_dist_after <- mutate(t_dist_after
+                       ,pct_after = round(events/sum(t_dist_after$events),4))
+t_dist_before <- filter(tornadoes_hourly_distro
+                       , wea_enabled == "Before") 
+t_dist_before <- mutate(t_dist_before
+                       ,pct_before = round(events/sum(t_dist_before$events),4))
+
+
+t_h_cas_bef <- filter(tornadoes_hourly, wea_enabled == "Before") %>%
+  select(hour
+            , dth_bef = death_rate
+            , inj_bef = injury_rate)
+
+
+t_h_cas_aft <- filter(tornadoes_hourly, wea_enabled == "After") %>%
+  select(hour
+            , dth_aft = death_rate
+            , inj_aft = injury_rate)
+
+t_dist <- inner_join(
+  select(t_dist_before, hour, pct_bef = pct_before),
+  select(t_dist_after, hour, pct_aft = pct_after)
+) %>%
+  inner_join(t_h_cas_bef) %>%
+  inner_join(t_h_cas_aft) %>%
+  mutate(dist_delta = round(-(pct_bef - pct_aft)/pct_bef,4)
+         , dth_delt = round(-(dth_bef - dth_aft)/dth_bef,4)
+         , inj_delt = round(-(inj_bef - inj_aft)/inj_bef,4)
+         )
+
+rm()
+
+
+# graph the death rate by hour before and after WEA
+# hypothesis - new method of alerting will 
+# lower casualty rates overnight
+
+require(ggplot2)
+require(reshape2)
+
+t_dist_plot <- melt(t_dist
+                    , id.vars = "hour"
+                    , variable.name = "WEA_Enabled"
+                    , measure.vars = c("pct_bef", "pct_aft")
+                    , value.name = "Distribution"
+                    )
+  
+n <- ggplot(t_dist_plot, aes(hour , Distribution)) + 
+     geom_point(aes(color = WEA_Enabled))
+
+n + scale_color_brewer(palette = "Paired"
+                           , type = "qual"
+                           , direction = -1
+                           , breaks = waiver()
+                           , name = ""
+                           , labels = c("Before WEA", "After WEA")
+  )
+  
+
+# Tornado hourly distribution by strength of storm pre and post WEA
+n <- ggplot(str_events_dist
+            , aes(hour
+                  , dist
+                  , color = wea_enabled
+                  , facets = fscale)
+            )
+
+n + geom_point() +
+  facet_wrap(facets = ~fscale
+             , ncol = 1
+             , scales = "free_y") 
+    scale_color_brewer(palette = "Paired"
+                        , type = "qual"
+                        , direction = -1
+                        , breaks = waiver()
+                        , name = ""
+                        , labels = c("Before WEA", "After WEA")
+)
+ 
+
+
+# Hourly casualty rates
+
+torn_hourly_plot <- melt(tornadoes_hourly
+                         , id.vars = c("hour", "wea_enabled")
+                         , variable.name = "casualty_type"
+                         , measure.vars = c("death_rate", "injury_rate")
+                         , value.name = "rate"
+                         , factorsAsStrings = TRUE
+)
+
+n <- ggplot(torn_hourly_plot
+            , mapping = aes(hour, rate
+                            , facets = casualty_type
+                            , fill = wea_enabled)
+)
+
+n + geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(facets = ~casualty_type) + 
+  labs(title = "Tornado Casualty Rates by Hour"
+       , subtitle = "Before and after WEA alerting enabled April 7, 2012"
+       , x = "Hour"
+       , y = "Casualty Rate")  +
+  scale_fill_brewer(#palette = "Paired",
+                    type = "qual"
+                    , direction = -1
+                    , breaks = waiver()
+                    , name = ""
+                    , labels = c("Before WEA", "After WEA")
+  ) +
+  facet_wrap(facets = ~casualty_type
+             , ncol = 1
+             , scales = "free_y") 
+
+
+```
+
+## Conclusions:
+
+On average, similarly sized tornadoes caused, on average, fewer deaths and injuries after WEA messages began to be sent. Flash floods also caused, on average fewer deaths after WEA messages began tobe delivered. 
+
+Although we are not able to draw a causal relationship between the use of WEA alerts by the NWS and the lowered casualty rate for these types of events; we can,  however, see that fast-moving, localized weather events for which the NWS did not use WEA messages (lightning strikes and thunderstorm winds), did not experience similar decreases in casualty rates after May 1, 2012. 
+
+Although they were also the frequent subject of WEA messages, flash floods did not cause appreciably fewer deaths after WEA. One possible cause may be suggested by a study which uses brain mapping to conclude that, "The perceived urgency of floods also appears to be more sensitive to the personality characteristics of individuals than during other types of disasters." [Modeling Cognitive Response to Wireless Emergency Alerts to Inform Emergency Response Interventions PNNL-25257](https://www.dhs.gov/publication/wea-modeling-cognitive-response-wea-inform-emergency-response-interventions).   
