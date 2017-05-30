@@ -1,16 +1,16 @@
 ---
 title: "Weather Events and WEA Messages"
 author: "Aaron M. Silverman"
-date: "March 31, 2017"
+date: "May 3, 2017"
 output:
-  html_notebook:
-    theme: cosmo
   html_document:
     fig_caption: yes
     highlight: pygments
     keep_md: yes
     theme: cosmo
     toc: yes
+  html_notebook:
+    theme: cosmo
   pdf_document:
     fig_caption: yes
     fig_width: 7
@@ -31,19 +31,22 @@ library(tidyverse)
 library(lubridate)
 library(RCurl)
 library(stringr)
-
+library(pander)
+library(reshape2)
 ```
 # Executive Summary
 
 On April 7,  2012, the Federal Emergency Management Agency (FEMA) began to use [Wireless Emergency Alerts (WEA)](https://www.fema.gov/frequently-asked-questions-wireless-emergency-alerts) to warn Americans of "imminent threats to life or property." These alerts consisted of 90-character messages sent by participating Cellular Mobile Service (CMS) providers over a high-priority channel to devices that were in range of specific cellular towers.
 
-As a part of the 2006 WARN act which allowed the creation of WEA, all public television stations with Non-Commercial Educational licenses were required to pass the WEA messages from FEMA to CMS providers as a part of the normal television broadcast feed. Since 2010, the PBS WARN project has designed, implemented, and maintained this diverse path for CMS providers to receive WEA messages. 
+As a part of the 2006 WARN act which allowed the creation of WEA, all public television stations with Non-Commercial Educational licenses were required to pass the WEA messages from FEMA to CMS providers as a part of the normal television broadcast feed. Since 2010, the [PBS WARN project](http://pbs.org/about/warn) has designed, implemented, and maintained this diverse path for CMS providers to receive WEA messages. 
 
-Anecdotal evidence exists that WEA messages have saved lives in numerous situations, there has not been an analysis of the data on storm-related casualties before and after WEA implementation. 
+Anecdotal evidence exists that [WEA messages have saved lives in numerous situations](https://youtu.be/gC7pvCIb4-g). [WEA AMBER Alerts have been directly credited with the rescues of 38 children](http://www.missingkids.org/KeyFacts) since that program was initiated in February 2013. 
 
-We find that the commencement of tornado and flash flood warnings delivered over WEA coincide with a significant drop in the mean number of fatalities and injuries caused by tornadoes and a 90% decrease in the mean number of injuries caused by flash floods.
+However, no systemic analysis of the data on storm-related casualties before and after WEA implementation. 
 
-When comparing the fatality rates of similarly-sized tornado events (based on EF Scale) before and after the availability of WEA, we find that the mean number of deaths has gone down for tornadoes smaller than EF5. 
+We find that the commencement of tornado and flash flood warnings delivered over WEA coincide with a significant drop in the mean number of fatalities and injuries caused by tornadoes and a 90% decrease in mean injuries caused by flash floods. Similar decreases were not seen in the 
+
+When comparing the fatality rates of similarly-sized tornado events (based on EF Scale) before and after the availability of WEA, we find that the rate of deaths and injuries have also gone down, when outlier events are removed. 
 
 Recently, the FCC issued [FCC 16-127, Report and Order and Notice of Proposed Rule-Making](https://www.fcc.gov/document/improving-wireless-emergency-alerts-and-community-initiated-alerting-1) which would require CMS providers to support larger messages. Although this analysis does not draw any causal relationship between the availability of WEA messages and the mean number of deaths and injuries caused by weather events, any  discussion of revisions to WEA should be informed by a thorough discussion of the current program's successes and shortcomings.
 
@@ -51,11 +54,8 @@ Recently, the FCC issued [FCC 16-127, Report and Order and Notice of Proposed Ru
 
 Event information was taken from the  [NOAA](ftp://ftp.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/) database of storm events. The events were downloaded from NOAA immediatly prior to this report being run. 
 
-```{r main_data_frame, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+```{r download, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
 
-#create download and save-file URLs
-
-## To analyze most recent data uncomment the following two lines
 url <- "ftp://ftp.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/"
 filenames <-  getURL(url, ftp.use.epsv = FALSE, dirlistonly = TRUE)
 
@@ -65,18 +65,18 @@ if (!file.exists("data")) {
         dir.create("data")
 }
 
-if (!exists("weather_event_df")) {
+if (!exists("weather_event_tbl")) {
   # If not, get to work
   
   filenames <- strsplit(filenames, "\r\n")
   filenames = unlist(filenames)
   
   # detail.files contains the list of the files that we actually
-  # want to download. In this case 1997 - 2016
+  # want to download. In this case 1997 - 2017
   
   detail.files <- filenames[grep(dld_base, filenames)]
   filenames = ""
-  for (i in 1997:2016) {
+  for (i in 1997:2017) {
     filenames[i - 1996] <-
       detail.files[grep(paste0(".*_d", i, "_.*"), detail.files)]
   }
@@ -186,41 +186,13 @@ rm(weather_event_df)
 
 # Effects of WEA on Weather-Related Injuries and Deaths
 
-The first question that I would like to answer is if there has been any change in the number of deaths and/or injuries caused by flash floods and/or tornadoes since the National Weather Service started issuing them in April 2012.  As a control, I will look at the same statistics for other localized, fast-moving weather events with relatively high amounts of casualties - thunderstorm winds and lightning; neither of which are frequently included in WEA messages.
+The first question that I would like to answer is if there has been any change in the death and/or injury rates for by flash floods and tornadoes since the National Weather Service started issuing warnings via WEA on April 7, 2012.  I use the measure of mean casualties directly caused by the particular weather event in order to control for the lower incidence of storms in the years since 2011. 
 
-The event is considered "Before WEA"" if occurred before April 7, 2012 and "After WEA" if it occurred after that date.
+Thunderstorm wind and lightning events do not regularly trigger WEA messages, but are also caused by localized, fast-moving weather events. Although death and injury rates for these event types are historically much lower than the rates for tornado and flash flood events, we will look at rates of change for the four different event types as an extremely rough proxy for a WEA message having been issued for a specific event.  
+
+The event is considered "Before WEA" if occurred before April 7, 2012 and "After WEA" if it occurred on or after that date.
 
 ```{r any_wea_effect, fig.height = 4, message=FALSE, warning=FALSE, cache=TRUE}
-
-
-# Isolate tornado events
-tornadoes <- filter(weather_event_tbl, type == "Tornado") %>%
-  select(id, 1:3, begin
-         , d_direct = DEATHS_DIRECT
-         , d_indirect = DEATHS_INDIRECT
-         , i_direct = INJURIES_DIRECT
-         , i_indirect = INJURIES_INDIRECT
-         , fscale
-         ) %>%
-  mutate(year = year(begin)
-         , wea_enabled = factor(
-           if_else(begin >= mdy("4/7/2012")
-                   , false = "Before"
-                   , true = "After")
-           , levels = c("Before", "After")
-           , ordered = FALSE
-         )
-  )
-
-tornado_deaths <- tornadoes %>% 
-  group_by(year) %>% 
-  summarize(count = n()
-            , d_direct = sum(d_direct)
-            , d_indirect = sum(d_indirect)
-            , i_direct = sum(i_direct)
-            , i_indirect = sum(i_indirect)
-            )
-  
 #compare tornadoes and flash floods to non-wea alerted storm events
 
 tor_flo_wind_light <- filter(weather_event_tbl #event.damage from former version
@@ -253,38 +225,207 @@ twfl_yrly <- group_by(tor_flo_wind_light, type, year) %>%
             , death_rate = round((deaths/count),digits = 4)
             )
 
-tfwl_sum <- group_by(tor_flo_wind_light, type) %>% 
-  summarise(count = n()
-            , deaths = sum(d_deaths)
-            , death_rate = round((deaths/count),digits = 4)
-            , injuries = sum(d_injuries)
-            , injury_rate = round((injuries/count),digits = 4)
-            ) 
+tfwl_sum <- group_by(tor_flo_wind_light, type, wea_enabled) %>% 
+  summarize(events = n()
+            , death_rate = mean(d_deaths)
+            , injury_rate = mean(d_injuries)
+            ) %>%
+  melt(id.vars = c(1,2)
+       , variable.name = "statistic"
+       , value.name = "number")
+  
+#Plot Injuries
+m <- ggplot(filter(tfwl_sum, statistic == "injury_rate")
+            , mapping = aes(wea_enabled
+                            , number
+                            , fill = wea_enabled
+                            , facets = type))
 
+plot_inj <- m + geom_bar(stat = "identity") +
+    labs(title = "Mean Injuries By Event Type"
+             , subtitle = "Before and After WEA Implementation"
+             , x = ""
+             , y = "Mean Injuries per Event") +
+    facet_wrap(facets = ~type
+               , ncol = 2
+               , scales = "fixed"
+               #, strip.position = "left"
+               )  +
+    scale_fill_brewer(palette = "Paired"
+              , type = "qual"
+              , direction = -1
+              , breaks = waiver()
+              , name = ""
+              , labels = c("Before WEA", "After WEA")
+              ) +
+    scale_y_continuous(expand = c(0.01, 0)) +
+    theme_light() + 
+    theme(axis.text.x = element_blank()
+              , legend.position = "bottom")
+
+#Plot Death Rate
+n <- ggplot(filter(tfwl_sum, statistic == "death_rate")
+            , mapping = aes(wea_enabled
+                            , number
+                            , fill = wea_enabled
+                            , facets = type))
+
+plot_dea <- n + geom_bar(stat = "identity") +
+    labs(title = "Mean Deaths By Event Type"
+             , subtitle = "Before and After WEA Implementation"
+             , x = ""
+             , y = "Mean Deaths per Event") +
+    facet_wrap(facets = ~type
+               , ncol = 2
+               , scales = "fixed"
+               #, strip.position = "left"
+               )  +
+    scale_fill_brewer(palette = "Paired"
+              , type = "qual"
+              , direction = -1
+              , breaks = waiver()
+              , name = ""
+              , labels = c("Before WEA", "After WEA")
+              ) +
+    scale_y_continuous(expand = c(0.01, 0)) +
+    theme_light() + 
+    theme(axis.text.x = element_blank()
+              , legend.position = "bottom")
+
+print(plot_inj)
+print(plot_dea)
+
+## Print the table
 twfl_wea_diff <- group_by(tor_flo_wind_light, type, wea_enabled) %>%
-summarise(count = n()
+summarize(count = n()
           , deaths = sum(d_deaths)
           , death_rate = round((deaths/count),digits = 4)
           , injuries = sum(d_injuries)
           , injury_rate = round((injuries/count),digits = 4)
 ) 
 
+
+
+# Gather and Spread to show stats by type before, after, and change
+twfl_wea_diff %>% 
+  gather(variable, amount, -type, -wea_enabled) %>%
+  spread(wea_enabled, amount, convert = TRUE, sep = "_") %>%
+  filter(grepl(pattern = "rate", x = variable) == TRUE) %>%
+  rename(`Event Type` = type
+         , Statistic = variable
+         , b = wea_enabled_Before
+         , a = wea_enabled_After
+         ) %>%
+  mutate(`% Decrease` = round((b - a) / b*100, 2)) %>%
+  rename(`Before WEA` = b, `After WEA` = a) %>%
+  pander()
+
+```
+
+Tornadoes may have simply gotten weaker since 2012.  Grouping the storms by their strength according to the [Enhanced Fujita Scale (EF)](http://www.spc.noaa.gov/efscale/) allows us to see make an apples-to-apples comparison for death and injury rates. 
+
+```{r tornado_by_EF}
+# Isolate tornado events
+tornadoes <- filter(weather_event_tbl, type == "Tornado") %>%
+  select(id, 1:3, begin
+         , d_direct = DEATHS_DIRECT
+         , d_indirect = DEATHS_INDIRECT
+         , i_direct = INJURIES_DIRECT
+         , i_indirect = INJURIES_INDIRECT
+         , fscale
+         ) %>%
+  mutate(year = year(begin)
+         , wea_enabled = factor(
+           if_else(begin >= mdy("4/7/2012")
+                   , false = "Before"
+                   , true = "After")
+           , levels = c("Before", "After")
+           , ordered = FALSE
+         )
+  )
+
+tornado_casualties <- tornadoes %>% 
+  group_by(fscale, wea_enabled) %>% 
+  summarize(death_rate = mean(d_direct)
+            , injury_rate = mean(i_direct)
+            ) %>%
+  melt(id.vars = c(1,2)
+       , variable.name = "statistic"
+       , value.name = "number")
+  
+## Plot Tornado Casualties Before and After
+
+ n <- ggplot(data = filter(tornado_casualties, 
+                           as.numeric(str_extract(fscale, "[0-4]")) < 5)
+             , mapping = aes(fscale
+                             , number
+                             , facets = statistic
+                             , fill = wea_enabled
+                             )) 
+  tornado_ef_plot <- n + geom_bar(stat = "identity"
+             , position = "dodge") + 
+    labs(title = "Tornado Casualties By Strength"
+             , subtitle = "Before and After WEA Implementation"
+             , x = "Tornado Strength (EF Scale)"
+             , y = "Mean Casualties per event") +
+    scale_fill_brewer(palette = "Paired"
+                      , type = "qual"
+                      , direction = -1
+                      , breaks = waiver()
+                      , name = ""
+                      , labels = c("Before WEA", "After WEA")
+                      ) +
+    facet_wrap(facets = ~statistic
+              , ncol = 2
+              , scales = "free_y"
+              #, strip.position = "left"
+              )  +
+    scale_x_discrete(breaks = waiver()
+                     , labels = c("EF0"
+                                  , "EF1"
+                                  , "EF2"
+                                  , "EF3"
+                                  , "EF4")
+                     ) + 
+    scale_y_continuous(expand = c(0.01, 0)) + 
+    theme_light() + 
+       theme(legend.position = "bottom")
+
+tornado_ef_plot
+
 tornado_sum_tbl <- filter(tornadoes
-                          , as.numeric(fscale) >=0) %>%
+                          , as.numeric(str_extract(fscale, "[0-9]")) < 5) %>%
   select(year
          , deaths = d_direct
          , injuries = i_direct
          , fscale
          , wea_enabled) %>%
   group_by(fscale, wea_enabled) %>%
-  summarize_at(c("deaths", "injuries"), c("mean","sum")) %>%
-  mutate(
-               death_rate = round(as.numeric(deaths_mean), 4)
-            ,  injury_rate = round(as.numeric(injuries_mean), 4)
+  summarize_at(c("deaths", "injuries"), c("mean")) %>%
+  ungroup() %>%
+
+  gather(variable, amount, -fscale, -wea_enabled) %>%
+  spread(wea_enabled, amount, convert = TRUE, sep = "_") %>%
+  transmute( `EF Rating` = fscale
+            , Statistic = variable
+            ,  `Before WEA` = round(as.numeric(wea_enabled_Before), 4)
+            ,  `After WEA` = round(as.numeric(wea_enabled_After), 4)
+            , `% Decrease` = round((`Before WEA` - `After WEA`)/`Before WEA`*100,2)
             ) %>%
-  select(-c(3:4))
+pander()
+```
 
+There has only been one EF-5 tornado since 2012, the Moore, OK storm which killed 24 and injured 377.  EF-0 tornados have very low injury and fatality rates when compared to stronger storms, causing only five deaths over the 20-year period.  We see a decrease in injury and fatality rates across the remaining four levels. Perhaps EF-0 and EF-5 storms may be considered outliers?
 
+## Overnight Warnings
+
+A key feature of WEA, absent from other widespread alerting methods, is the ability to wake potential storm victims.  The distinct alarm that accompanies a WEA can be jarring when received in the middle of the night. A recurring detail of news stories regarding WEA is being awakened by these alarms.  
+
+Could these anecdotes be observable in the data? 
+
+If we compare death and injury rates for tornadoes at each hour, a sharper decrease in overnight (9pm - 7am) than daytime casualty rates may also point to WEA messages as a potential cause. 
+
+```{r tornado_hourly_comparison}
 tornadoes_hourly <- transmute(tornadoes
                               , hour = hour(begin)
                               , deaths = d_direct
@@ -325,14 +466,59 @@ t_h_by_strength <- transmute(tornadoes
                                , fscale
                                , wea_enabled) %>%
   group_by(hour, wea_enabled, fscale) %>%
-  summarize_all(funs("mean") )%>%
+  summarize_all(funs("mean") ) %>%
   mutate(
     death_rate = round(as.numeric(deaths), 4)
-    , injury_rate = round(as.numeric(injuries), 4) )%>%
+    , injury_rate = round(as.numeric(injuries), 4) ) %>%
   select(hour, wea_enabled, fscale, death_rate, injury_rate)
 
 ## Hourly distribution of tornadoes before and after WEA
-##   
+##  
+
+require(ggplot2)
+require(reshape2)
+
+
+# Hourly casualty rates
+
+torn_hourly_plot <- melt(tornadoes_hourly
+                         , id.vars = c("hour", "wea_enabled")
+                         , variable.name = "casualty_type"
+                         , measure.vars = c("death_rate", "injury_rate")
+                         , value.name = "rate"
+                         , factorsAsStrings = TRUE
+)
+
+n <- ggplot(torn_hourly_plot
+            , mapping = aes(hour, rate
+                            , facets = casualty_type
+                            , fill = wea_enabled)
+)
+
+n + geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(facets = ~casualty_type) + 
+  labs(title = "Tornado Casualty Rates by Hour"
+       , subtitle = "Before and after WEA alerting enabled April 7, 2012"
+       , x = "Hour"
+       , y = "Casualty Rate")  +
+  scale_fill_brewer(palette = "Paired",
+                    type = "qual"
+                    , direction = -1
+                    , breaks = waiver()
+                    , name = ""
+                    , labels = c("Before WEA", "After WEA")
+  ) +
+  facet_wrap(facets = ~casualty_type
+             , ncol = 1
+             , scales = "free_y") 
+
+ 
+```
+We should look at the hourly distribution of storms by EF level - perhaps stronger storms occurred at different times of the day before and after April 7, 2012.
+
+```{r hourly_distribution}
+
+ 
 tornadoes_hourly_distro <- transmute(tornadoes
                              , hour = hour(begin)
                              , wea_enabled) %>%
@@ -378,31 +564,30 @@ rm()
 # hypothesis - new method of alerting will 
 # lower casualty rates overnight
 
-require(ggplot2)
-require(reshape2)
 
 t_dist_plot <- melt(t_dist
                     , id.vars = "hour"
-                    , variable.name = "WEA_Enabled"
+                    , variable.name = "wea_enabled"
                     , measure.vars = c("pct_bef", "pct_aft")
                     , value.name = "Distribution"
                     )
   
 n <- ggplot(t_dist_plot, aes(hour , Distribution)) + 
-     geom_point(aes(color = WEA_Enabled))
+     geom_point(aes(color = wea_enabled))
 
-n + scale_color_brewer(palette = "Paired"
-                           , type = "qual"
-                           , direction = -1
-                           , breaks = waiver()
-                           , name = ""
-                           , labels = c("Before WEA", "After WEA")
-  )
+n + scale_color_brewer(palette = "Paired",
+                    type = "qual"
+                    , direction = -1
+                    , breaks = waiver()
+                    , name = ""
+                    , labels = c("Before WEA", "After WEA")
+)
   
 
 # Tornado hourly distribution by strength of storm pre and post WEA
-n <- ggplot(str_events_dist
-            , aes(hour
+n <- ggplot(filter(str_events_dist
+                   ,  as.numeric(str_extract(fscale, "[0-9]")) >= 0)
+            , mapping = aes(hour
                   , dist
                   , color = wea_enabled
                   , facets = fscale)
@@ -410,8 +595,8 @@ n <- ggplot(str_events_dist
 
 n + geom_point() +
   facet_wrap(facets = ~fscale
-             , ncol = 1
-             , scales = "free_y") 
+             , ncol = 2
+             , scales = "free_y")  +
     scale_color_brewer(palette = "Paired"
                         , type = "qual"
                         , direction = -1
@@ -419,49 +604,18 @@ n + geom_point() +
                         , name = ""
                         , labels = c("Before WEA", "After WEA")
 )
- 
-
-
-# Hourly casualty rates
-
-torn_hourly_plot <- melt(tornadoes_hourly
-                         , id.vars = c("hour", "wea_enabled")
-                         , variable.name = "casualty_type"
-                         , measure.vars = c("death_rate", "injury_rate")
-                         , value.name = "rate"
-                         , factorsAsStrings = TRUE
-)
-
-n <- ggplot(torn_hourly_plot
-            , mapping = aes(hour, rate
-                            , facets = casualty_type
-                            , fill = wea_enabled)
-)
-
-n + geom_bar(stat = "identity", position = "dodge") + 
-  facet_wrap(facets = ~casualty_type) + 
-  labs(title = "Tornado Casualty Rates by Hour"
-       , subtitle = "Before and after WEA alerting enabled April 7, 2012"
-       , x = "Hour"
-       , y = "Casualty Rate")  +
-  scale_fill_brewer(#palette = "Paired",
-                    type = "qual"
-                    , direction = -1
-                    , breaks = waiver()
-                    , name = ""
-                    , labels = c("Before WEA", "After WEA")
-  ) +
-  facet_wrap(facets = ~casualty_type
-             , ncol = 1
-             , scales = "free_y") 
-
 
 ```
+We can see that storms of similar strength occurred at similar times of day before and after WEA.  
 
-## Conclusions:
+This data strongly suggests that tornadoes were much less injurious overnight after the availability of WEA tornado alerts. 
 
-On average, similarly sized tornadoes caused, on average, fewer deaths and injuries after WEA messages began to be sent. Flash floods also caused, on average fewer deaths after WEA messages began tobe delivered. 
+# Conclusions:
 
-Although we are not able to draw a causal relationship between the use of WEA alerts by the NWS and the lowered casualty rate for these types of events; we can,  however, see that fast-moving, localized weather events for which the NWS did not use WEA messages (lightning strikes and thunderstorm winds), did not experience similar decreases in casualty rates after May 1, 2012. 
+On average, similarly sized tornadoes caused, on average, fewer deaths and injuries after WEA messages began to be sent. Flash floods also caused, on average fewer injuries after WEA messages began tobe delivered. 
 
-Although they were also the frequent subject of WEA messages, flash floods did not cause appreciably fewer deaths after WEA. One possible cause may be suggested by a study which uses brain mapping to conclude that, "The perceived urgency of floods also appears to be more sensitive to the personality characteristics of individuals than during other types of disasters." [Modeling Cognitive Response to Wireless Emergency Alerts to Inform Emergency Response Interventions PNNL-25257](https://www.dhs.gov/publication/wea-modeling-cognitive-response-wea-inform-emergency-response-interventions).   
+Although we are not able to draw a causal relationship between the use of WEA alerts by the NWS and the lowered casualty rate for these types of events; we can,  however, see that fast-moving, localized weather events for which the NWS did not use WEA messages (lightning strikes and thunderstorm winds), did not experience similar decreases in casualty rates after April 7, 2012. 
+
+Although they were also the frequent subject of WEA messages, the death rate for flash floods did not decrease after WEA alerting. One possible cause may be suggested by a study which uses brain mapping to conclude that, "The perceived urgency of floods also appears to be more sensitive to the personality characteristics of individuals than during other types of disasters." [Modeling Cognitive Response to Wireless Emergency Alerts to Inform Emergency Response Interventions PNNL-25257](https://www.dhs.gov/publication/wea-modeling-cognitive-response-wea-inform-emergency-response-interventions).  
+
+Further investigation into the effect of WEA messages on population health could involve tying specific alerts sent out via WEA to the injuries and fatalities caused by those storm events. 

@@ -2,142 +2,93 @@ library(knitr)
 library(tidyverse)
 library(lubridate)
 library(RCurl)
+library(data.table)
+library(stringr)
+library(R.utils)
+
 #create download and save-file URLs
 
 ## To analyze most recent data uncomment the following two lines
 url <- "ftp://ftp.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/"
-filenames <-  getURL(url, ftp.use.epsv = FALSE, dirlistonly = TRUE)
+allfiles <-  getURL(url, ftp.use.epsv = FALSE, dirlistonly = TRUE) %>%
+  strsplit("\r\n") %>%
+  unlist()
 
 ## To speed up for testing, ftp docs to "data/" and uncomment the next two lines
 ## 
 # url <- "data/"
 # filenames <- dir("data/")
 
-dld_base <- "StormEvents_details-ftp_v1.0_d"
+dld_base <- "StormEvents_details"
 
 if (!file.exists("data")) {
         dir.create("data")
 }
 
-if (!exists("weather_event_df")) {
+if (!exists("weather_events")) {
   # If not, get to work
-  
-  filenames <- strsplit(filenames, "\r\n")
-  filenames = unlist(filenames)
-  
   # detail.files contains the list of the files that we actually
-  # want to download. In this case 1997 - 2016
+  # want to download. In this case 1997 - 2017
   
-  detail.files <- filenames[grep(dld_base, filenames)]
-  filenames = ""
-  for (i in 1997:2016) {
+  detail.files <- allfiles[grep(dld_base, allfiles)]
+  filenames = vector(length = 21)
+  for (i in 1997:2017) {
     filenames[i - 1996] <-
       detail.files[grep(paste0(".*_d", i, "_.*"), detail.files)]
   }
   
   # read files into Weather Event Data Frame (wedf)
-  weather_event_df <- data.frame()
-  
-  for (filename in filenames) {
-    # message("downloading and parsing ", filename)
-    weather_event_df  <- bind_rows(weather_event_df,
-                      read_csv(
-                        file = (paste0(url, filename))
-                        , col_types =
-                          cols(
-                            BEGIN_YEARMONTH = "i",
-                            BEGIN_DAY = "i",
-                            BEGIN_TIME = "c",
-                            END_YEARMONTH = "i",
-                            END_DAY = "i",
-                            END_TIME = "c",
-                            EPISODE_ID = "i",
-                            EVENT_ID = "i",
-                            STATE = "c",
-                            STATE_FIPS = "i",
-                            YEAR = "i",
-                            MONTH_NAME = "c",
-                            EVENT_TYPE = "c",
-                            CZ_TYPE = "c",
-                            CZ_FIPS = "i",
-                            CZ_NAME = "c",
-                            WFO = "c",
-                            BEGIN_DATE_TIME = "c",
-                            CZ_TIMEZONE = "c",
-                            END_DATE_TIME = "c",
-                            INJURIES_DIRECT = "i",
-                            INJURIES_INDIRECT = "i",
-                            DEATHS_DIRECT = "i",
-                            DEATHS_INDIRECT = "i",
-                            DAMAGE_PROPERTY = "c",
-                            DAMAGE_CROPS = "c",
-                            SOURCE = "c",
-                            MAGNITUDE = "d",
-                            MAGNITUDE_TYPE = "c",
-                            FLOOD_CAUSE = "c",
-                            CATEGORY = "d",
-                            TOR_F_SCALE = "c",
-                            TOR_LENGTH = "d",
-                            TOR_WIDTH = "d",
-                            TOR_OTHER_WFO = "c",
-                            TOR_OTHER_CZ_STATE = "c",
-                            TOR_OTHER_CZ_FIPS = "i",
-                            TOR_OTHER_CZ_NAME = "c",
-                            BEGIN_RANGE = "i",
-                            BEGIN_AZIMUTH = "c",
-                            BEGIN_LOCATION = "c",
-                            END_RANGE = "i",
-                            END_AZIMUTH = "c",
-                            END_LOCATION = "c",
-                            BEGIN_LAT = "d",
-                            BEGIN_LON = "d",
-                            END_LAT = "d",
-                            END_LON = "d",
-                            EPISODE_NARRATIVE = "-",
-                            EVENT_NARRATIVE = "-",
-                            DATA_SOURCE = "c"
-                          )
-                      )
-                    )
+  weather_events <- data.table()
+  for (files in filenames) {
+     print(files)
+    # Check if the file has been downloaded and unzipped
+    # If not, download, unzip, and store the extracted filename
+    # Otherwise, just save the 
+    if(! file.exists(paste0("data/", str_replace(files, "\\.gz$", "")))) {
+    download.file(url = paste0(url, files)
+                  , destfile = paste0("data/", files))
+    t <-  gunzip(filename = paste0("data/", files), temporary = FALSE)
+    } else t <- paste0("data/", str_replace(files, "\\.gz$", ""))
+      weather_events <- rbind(weather_events,
+            fread(t ,
+            select = c("EPISODE_ID", "EVENT_ID", "EVENT_TYPE"
+                       , "BEGIN_DATE_TIME", "END_DATE_TIME","CZ_TIMEZONE" 
+                       , "STATE_FIPS", "CZ_FIPS", "WFO"
+                       , "INJURIES_DIRECT", "INJURIES_INDIRECT"
+                       , "DEATHS_DIRECT", "DEATHS_INDIRECT"
+                       , "DAMAGE_PROPERTY", "DAMAGE_CROPS"
+                       , "MAGNITUDE", "MAGNITUDE_TYPE", "FLOOD_CAUSE"
+                       , "CATEGORY", "TOR_F_SCALE", "TOR_LENGTH", "TOR_WIDTH"
+                       , "BEGIN_RANGE", "BEGIN_AZIMUTH","BEGIN_LOCATION"
+                       , "END_RANGE","END_AZIMUTH","END_LOCATION"
+                       , "BEGIN_LAT", "BEGIN_LON", "END_LAT","END_LON"
+                       , "EPISODE_NARRATIVE","EVENT_NARRATIVE")
+            )
+      ) 
+
   }
   
 }
+#make names lowercase)   
 
+names(weather_events) <- tolower(names(weather_events))
 
-library(stringr)
-
-weather_event_tbl <- as.tbl(
-  select(weather_event_df
-         , id = EVENT_ID, st = STATE_FIPS, cz = CZ_FIPS 
-         , type = EVENT_TYPE
-         , begin = BEGIN_DATE_TIME
-         , tz = CZ_TIMEZONE
-         , INJURIES_DIRECT:DAMAGE_CROPS
-         , fscale = TOR_F_SCALE
-         , begin_lat = BEGIN_LAT
-         , begin_lon = BEGIN_LON 
-         , end_lat = END_LAT
-         , end_lon = END_LON
-  )) %>%
-  mutate(type = tolower(type)) %>%
-  mutate(type = gsub("heavy wind", "high wind", type)) %>%
-  mutate(type = gsub("high snow", "heavy snow", type)) %>%
-  mutate(type = gsub("^hurricane$", "hurricane (typhoon)", type)) %>%
-  mutate(type = gsub("landslide", "avalanche", type)) %>%
-  mutate(type = gsub("thunderstorm winds?.*", "thunderstorm wind", type)) %>%
-  mutate(type = gsub("volcanic ashfall", "volcanic ash", type)) %>%
-#  mutate(type = gsub("tornado/waterspout", "waterspout", type)) %>%
-  mutate(type = str_to_title(type)) %>%
-  mutate(fscale = as.factor(gsub("^E?F","F",fscale))) %>%
-  dplyr::filter(type != "Northern Lights") %>%
-  dplyr::filter(type != "Other") %>%
-  mutate( type = as.factor(type)
-          ,st = as.factor(sprintf("%02d",st))
-          ,cz = as.factor(sprintf("%05d",cz))
-          ,begin = dmy_hms(begin)
-          ,tz = toupper(str_trunc(tz, 3, side = "r", ellipsis = ""))
-  ) %>%
-  arrange(begin) 
-
-rm(weather_event_df)
+weather_events <- weather_events %>% 
+  mutate(begin_date_time = dmy_hms(begin_date_time)
+         , end_date_time = dmy_hms(end_date_time)
+         , tor_f_scale = as.factor(gsub("^E?F","F",tor_f_scale))
+         , event_type = as.factor(event_type)
+         , geoid = paste0(
+            sprintf("%02d",state_fips) ,sprintf("%03d",cz_fips))
+         ) %>%
+  transmute(id = event_id, episode_id, begin_date_time, type, end_date_time
+         , cz_timezone, geoid, begin_lat, begin_lon, end_lat, end_lon 
+         , injuries_direct = as.numeric(injuries_direct)
+         , injuries_indirect = as.numeric(injuries_indirect)
+         , deaths_direct = as.numeric(deaths_direct)
+         , deaths_indirect = as.numeric(deaths_indirect)
+         , damage_property, damage_crops
+         , tor_f_scale, tor_length, tor_width 
+         , event_narrative) %>%
+  arrange(begin_date_time) 
 
